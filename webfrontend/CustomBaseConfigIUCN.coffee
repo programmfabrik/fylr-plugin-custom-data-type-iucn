@@ -1,3 +1,56 @@
+_collectionOptions = null
+
+# Loads the collection list and caches it. Returns the cached options once they
+# are there, and a promise while the request is running. CUI.Select accepts both
+# and shows a spinner while the promise is pending.
+loadCollectionOptions = ->
+	return _collectionOptions if _collectionOptions
+
+	placeholder = ->
+		return [
+			text: $$("server.config.parameter.system.iucn_settings.collection.placeholder")
+			value: null
+		]
+
+	deferred = new CUI.Deferred()
+
+	xhr = new CUI.XHR
+		method: "GET"
+		url: "/api/v1/collection/list"
+		headers:
+			"authorization": "Bearer " + ez5.session.token
+			"x-easydb-token": ez5.session.token
+
+	xhr.start().done((data) ->
+		options = placeholder()
+		flattenCollections(data.collections or data or [], options)
+		_collectionOptions = options
+		deferred.resolve(options)
+	).fail((e) ->
+		console.error("could not load the collection list:", e)
+		# resolve with the placeholder, a rejected promise would leave the select empty
+		deferred.resolve(placeholder())
+	)
+
+	return deferred.promise()
+
+# The collection list is a tree. It is flattened into a single list of options,
+# the depth is shown as indentation.
+flattenCollections = (collections, options, depth = 0) ->
+	return unless CUI.util.isArray(collections)
+	for coll in collections
+		c = coll.collection
+		continue unless c
+		dn = c.displayname or {}
+		# skip the personal top level folder that exists once per user
+		continue if Object.values(dn).some((v) -> v is "User Top Level")
+		name = dn["de-DE"] or dn["en-US"] or dn["mul-MUL"] or ("Collection " + c._id)
+		indent = "  ".repeat(depth)
+		options.push(text: indent + name, value: c._id)
+		flattenCollections(coll.children or [], options, depth + 1)
+	return
+
+
 class ez5.CustomBaseConfigIUCN extends BaseConfigPlugin
 
 	getFieldDefFromParm: (baseConfig, fieldName, def) ->
@@ -25,6 +78,12 @@ class ez5.CustomBaseConfigIUCN extends BaseConfigPlugin
 					type: CUI.Select
 					name: fieldName
 					options: options
+
+			when 'iucn_collection'
+				field =
+					type: CUI.Select
+					name: fieldName
+					options: -> loadCollectionOptions()
 		return field
 
 	# Search in all objecttypes using a 'filter' function.

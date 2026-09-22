@@ -237,6 +237,10 @@ class FylrApi {
         })
         return this.request("POST", `/api/v1/db/${objecttype}?base_fields_only=1&format=short`, body)
     }
+
+    pushToCollection(collectionId, objects) {
+        return this.request("POST", `/api/v1/collection/push/${collectionId}`, { objects: objects })
+    }
 }
 
 // ------------------------------------------------------------------ updating
@@ -334,9 +338,19 @@ async function searchAll(fylr, objecttypes, fields, values, handle) {
     }
 }
 
+// Returns the records whose red list tag actually changes. Records that already
+// carry the right tag are left out, so that only real changes are collected.
+function changedRecords(objects, redList, idTagRed) {
+    return objects.filter((object) => {
+        const hasTag = (object._tags || []).some((tag) => tag._id === idTagRed)
+        return redList ? !hasTag : hasTag
+    })
+}
+
 // Tags all records that use the entry, either directly or through a linked
-// object.
-async function updateTagsOfEntry(fylr, data, config) {
+// object. The records whose tag changed are pushed into the configured
+// collection, when there is one.
+async function updateTagsOfEntry(fylr, data, config, log) {
     const tagBodies = []
     if (data.redList) {
         tagBodies.push({
@@ -354,20 +368,37 @@ async function updateTagsOfEntry(fylr, data, config) {
         })
     }
 
+    const changed = []
+    const handleObjects = async (objects) => {
+        await tagObjects(fylr, objects, tagBodies)
+        if (!config.collectionId) {
+            return
+        }
+        for (const object of changedRecords(objects, data.redList, config.idTagRed)) {
+            changed.push({ _global_object_id: object._global_object_id })
+        }
+    }
+
     // records that hold the entry in a field of their own
-    await searchAll(fylr, objecttypesOf(config.fields), config.fields, [data.idTaxon], (objects) =>
-        tagObjects(fylr, objects, tagBodies)
-    )
+    await searchAll(fylr, objecttypesOf(config.fields), config.fields, [data.idTaxon], handleObjects)
 
     // records that hold the entry in a linked object
     const linkFields = config.linkedFields.map((field) => field.field)
     const linkedFields = config.linkedFields.map((field) => field.linked_field + "._global_object_id")
     await searchAll(fylr, objecttypesOf(linkFields), linkFields, [data.idTaxon], async (objects) => {
         const globalObjectIds = objects.map((object) => object._global_object_id)
-        await searchAll(fylr, objecttypesOf(linkedFields), linkedFields, globalObjectIds, (linkedObjects) =>
-            tagObjects(fylr, linkedObjects, tagBodies)
-        )
+        await searchAll(fylr, objecttypesOf(linkedFields), linkedFields, globalObjectIds, handleObjects)
     })
+
+    if (config.collectionId && changed.length > 0) {
+        try {
+            await fylr.pushToCollection(config.collectionId, changed)
+            log.push(`pushed ${changed.length} records into collection ${config.collectionId}`)
+        } catch (e) {
+            // a collection that cannot be written must not fail the whole batch
+            log.push(`could not push into collection ${config.collectionId}: ${e}`)
+        }
+    }
 }
 
 // Reads the tag configuration. Tagging is optional, so it returns null when
@@ -380,7 +411,12 @@ function getTagConfig(settings) {
     if (fields.length === 0 && linkedFields.length === 0) {
         return null
     }
-    return { idTagRed: settings.tag_red, fields, linkedFields }
+    return {
+        idTagRed: settings.tag_red,
+        fields,
+        linkedFields,
+        collectionId: settings.collection_id || null,
+    }
 }
 
 async function update(payload, info, log) {
@@ -406,7 +442,7 @@ async function update(payload, info, log) {
         updated.push(object)
 
         if (tagConfig && object.data.idTaxon) {
-            await updateTagsOfEntry(fylr, object.data, tagConfig)
+            await updateTagsOfEntry(fylr, object.data, tagConfig, log)
         }
 
         const elapsed = Date.now() - startTime
