@@ -139,9 +139,11 @@ function toObjectData(result) {
     const data = {
         idTaxon: undefined,
         scientificName: "",
+        nameSuffix: "",
         mainCommonName: "",
         category: "",
         redList: false,
+        url: "",
     }
 
     // /taxa/sis/{id} has sis_id at the top level, /taxa/scientific_name has it
@@ -162,6 +164,9 @@ function toObjectData(result) {
         data.category = latest.red_list_category_code
         data.redList = RED_LIST_CATEGORIES.includes(data.category)
     }
+    if (latest && latest.url) {
+        data.url = latest.url
+    }
 
     if (Array.isArray(result.taxon.common_names)) {
         for (const name of result.taxon.common_names) {
@@ -175,20 +180,32 @@ function toObjectData(result) {
     return data
 }
 
+// The display name is the scientific name from the IUCN API with any user
+// entered suffix appended, e.g. a subspecies epithet.
+function displayName(data) {
+    if (data.nameSuffix) {
+        return `${data.scientificName} ${data.nameSuffix}`
+    }
+    return data.scientificName
+}
+
 // Builds the data that is saved back to fylr.
 function toSaveData(data) {
+    const name = displayName(data)
     return {
         idTaxon: data.idTaxon,
         scientificName: data.scientificName,
+        nameSuffix: data.nameSuffix || "",
         mainCommonName: data.mainCommonName,
         category: data.category,
         redList: data.redList,
+        url: data.url || "",
         _fulltext: {
-            text: `${data.scientificName} ${data.mainCommonName}`,
+            text: `${name} ${data.mainCommonName}`,
             string: data.idTaxon ? `${data.idTaxon}` : "",
         },
         _standard: {
-            text: data.scientificName,
+            text: name,
         },
     }
 }
@@ -429,6 +446,9 @@ async function update(payload, info, log) {
             log.push(`entry ${object.identifier} was not found in the IUCN API`)
             object.data = toSaveData(Object.assign({}, object.data, { redList: false }))
         } else {
+            // the suffix is entered by the editor and is not part of the IUCN
+            // response, so it has to be carried over
+            data.nameSuffix = object.data.nameSuffix || ""
             object.data = toSaveData(data)
         }
         object.data._expires_at = expiresAt(intervalDays)

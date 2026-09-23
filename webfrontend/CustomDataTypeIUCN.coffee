@@ -111,6 +111,10 @@ class CustomDataTypeIUCN extends CustomDataType
 					genus = parts[0]
 				if parts.length > 1
 					species = parts[1]
+				# tokens beyond genus and species, e.g. a subspecies epithet, are not
+				# used for the lookup but are kept as the name suffix so that they
+				# still appear in the object title after a match
+				nameSuffix = if parts.length > 2 then parts.slice(2).join(" ") else ""
 
 				ez5.IUCNUtil.searchByTaxonname(genus, species).done((response) ->
 					if not response
@@ -128,6 +132,7 @@ class CustomDataTypeIUCN extends CustomDataType
 								return
 
 							ez5.IUCNUtil.setObjectData(data, response)
+							data.nameSuffix = nameSuffix
 							onSearch()
 						).fail((e) ->
 							ez5.IUCNUtil.setObjectData(data, scientific_name: data.searchName)
@@ -230,18 +235,24 @@ class CustomDataTypeIUCN extends CustomDataType
 			rightContent.append(menuButton, "right")
 
 		if data.idTaxon
-			content = new CUI.VerticalList(content: [
-				new CUI.ButtonHref
+			# use the Red List url from the assessment, fall back to a plain label
+			# for entries that were saved before the url was stored
+			if data.url
+				nameContent = new CUI.ButtonHref
 					text: data.mainCommonName
 					class: "pluginResultButton"
 					appearance: "link"
-					href: "https://apistaging.iucnredlist.org/species/" + data.idTaxon
+					href: data.url
 					target: "_blank"
-				new CUI.Label(text: "#{data.idTaxon} - #{data.scientificName}", appearance: "secondary")
+			else
+				nameContent = new CUI.Label(text: data.mainCommonName)
+			content = new CUI.VerticalList(content: [
+				nameContent
+				new CUI.Label(text: "#{data.idTaxon} - #{ez5.IUCNUtil.getDisplayName(data)}", appearance: "secondary")
 				new CUI.Label(text: statusText, appearance: "secondary")
 			])
 		else
-			content = new CUI.Label(text: data.scientificName)
+			content = new CUI.Label(text: ez5.IUCNUtil.getDisplayName(data))
 
 		layout = new CUI.HorizontalLayout(
 			class: "ez5-field-object ez5-custom-data-type-iucn-card"

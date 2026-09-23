@@ -54,6 +54,8 @@ custom_types:
         type: text_oneline
       scientificName:
         type: text
+      nameSuffix:
+        type: text
       mainCommonName:
         type: text
     update:

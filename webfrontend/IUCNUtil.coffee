@@ -31,17 +31,24 @@ class ez5.IUCNUtil
 		if CUI.util.isEmpty(data)
 			delete object.idTaxon
 			delete object.scientificName
+			delete object.nameSuffix
 			delete object.mainCommonName
 			delete object.category
 			delete object.redList
+			delete object.url
 			return
 
 		if CUI.util.isArray(data)
 			data = data[0]
 
+		# nameSuffix holds any user entered tokens beyond the genus and species that
+		# were used for the lookup, e.g. a subspecies epithet. It is reset on every
+		# lookup, the caller re-applies it after a match.
+		object.nameSuffix = ""
 		object.redList = false
 		object.category = ""
 		object.mainCommonName = ""
+		object.url = data.url or ""
 		object.scientificName = data.scientific_name
 
 		if not data.sis_taxon_id # taxon id not found
@@ -73,23 +80,34 @@ class ez5.IUCNUtil
 		return object
 
 	@isEqual: (objectOne, objectTwo) ->
-		for key in ["idTaxon", "scientificName", "mainCommonName", "category", "redList"]
+		for key in ["idTaxon", "scientificName", "nameSuffix", "mainCommonName", "category", "redList"]
 			if not CUI.util.isEqual(objectOne[key], objectTwo[key])
 				return false
 		return true
 
+	# The display name is the scientific name from the IUCN API with any user
+	# entered suffix appended, e.g. a subspecies epithet. It is used for the
+	# object title and the search text.
+	@getDisplayName: (data) ->
+		if not CUI.util.isEmpty(data.nameSuffix)
+			return "#{data.scientificName} #{data.nameSuffix}"
+		return data.scientificName
+
 	@getSaveData: (data) ->
+		displayName = ez5.IUCNUtil.getDisplayName(data)
 		saveData =
 			idTaxon: data.idTaxon
 			scientificName: data.scientificName
+			nameSuffix: data.nameSuffix or ""
 			mainCommonName: data.mainCommonName
 			category: data.category
 			redList: data.redList
+			url: data.url or ""
 			_fulltext:
-				text: "#{data.scientificName} #{data.mainCommonName}"
+				text: "#{displayName} #{data.mainCommonName}"
 				string: if data.idTaxon? then "#{data.idTaxon}" else ""
 			_standard:
-				text: data.scientificName
+				text: displayName
 		return saveData
 
 	@getSettings: ->
