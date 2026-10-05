@@ -27,17 +27,22 @@ collectionLabel = (row) ->
 COLLECTION_PAGE_SIZE = 1000
 MAX_COLLECTION_PAGES = 50
 
-_loadingCollections = false
+_loadingCollections = null
 
-# Loads the collection list and keeps it. The list is flat, the tree is in _path.
-loadCollectionOptions = ->
-	return if _loadingCollections
-	_loadingCollections = true
-
-	options = [
+placeholderOptions = ->
+	return [
 		text: $$(PLACEHOLDER)
 		value: null
 	]
+
+# Loads the collection list and keeps it. The list is flat, the tree is in _path.
+# Returns a promise for the options, a load that is already running is shared.
+loadCollectionOptions = ->
+	return _loadingCollections if _loadingCollections
+
+	dfr = new CUI.Deferred()
+	_loadingCollections = dfr.promise()
+	options = placeholderOptions()
 
 	loadPage = (page) ->
 		ez5.api.collection(
@@ -59,15 +64,17 @@ loadCollectionOptions = ->
 
 			# only keep a list that was read to the end
 			_collectionOptions = options
-			_loadingCollections = false
+			_loadingCollections = null
+			dfr.resolve(options)
 		).fail((e) ->
 			console.error("could not load the collection list:", e)
-			_loadingCollections = false
+			_loadingCollections = null
+			dfr.resolve(_collectionOptions or placeholderOptions())
 		)
 		return
 
 	loadPage(0)
-	return
+	return _loadingCollections
 
 
 class ez5.CustomBaseConfigIUCN extends BaseConfigPlugin
@@ -99,17 +106,12 @@ class ez5.CustomBaseConfigIUCN extends BaseConfigPlugin
 					options: options
 
 			when 'iucn_collection'
-				# the options have to be there synchronously, options that arrive
-				# later mark the base config as changed
-				options = _collectionOptions or [
-					text: $$(PLACEHOLDER)
-					value: null
-				]
-				loadCollectionOptions() # refresh for the next time the panel opens
+				loadCollectionOptions() # refresh, picked up when the menu opens
 				field =
 					type: CUI.Select
 					name: fieldName
-					options: options
+					# the select calls this again on every menu open
+					options: -> _collectionOptions or loadCollectionOptions()
 		return field
 
 	# Search in all objecttypes using a 'filter' function.
