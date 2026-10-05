@@ -22,23 +22,51 @@ collectionLabel = (row) ->
 		return "#{row.collection._id}"
 	return names.join(" / ")
 
+# The list endpoint answers at most PAGE_SIZE rows and the system collections,
+# one per user, take up most of them, so it has to be read page by page.
+COLLECTION_PAGE_SIZE = 1000
+MAX_COLLECTION_PAGES = 50
+
+_loadingCollections = false
+
 # Loads the collection list and keeps it. The list is flat, the tree is in _path.
 loadCollectionOptions = ->
-	ez5.api.collection(api: "/list").done((data) ->
-		rows = data.collections or data.objects or data or []
-		options = [
-			text: $$(PLACEHOLDER)
-			value: null
-		]
-		for row in rows
-			collection = row?.collection
-			continue unless collection
-			continue if collection.is_system_collection
-			options.push(text: collectionLabel(row), value: collection._id)
-		_collectionOptions = options
-	).fail((e) ->
-		console.error("could not load the collection list:", e)
-	)
+	return if _loadingCollections
+	_loadingCollections = true
+
+	options = [
+		text: $$(PLACEHOLDER)
+		value: null
+	]
+
+	loadPage = (page) ->
+		ez5.api.collection(
+			api: "/list"
+			data:
+				limit: COLLECTION_PAGE_SIZE
+				offset: page * COLLECTION_PAGE_SIZE
+		).done((data) ->
+			rows = data.collections or data.objects or data or []
+			for row in rows
+				collection = row?.collection
+				continue unless collection
+				continue if collection.is_system_collection
+				options.push(text: collectionLabel(row), value: collection._id)
+
+			if rows.length == COLLECTION_PAGE_SIZE and page + 1 < MAX_COLLECTION_PAGES
+				loadPage(page + 1)
+				return
+
+			# only keep a list that was read to the end
+			_collectionOptions = options
+			_loadingCollections = false
+		).fail((e) ->
+			console.error("could not load the collection list:", e)
+			_loadingCollections = false
+		)
+		return
+
+	loadPage(0)
 	return
 
 
