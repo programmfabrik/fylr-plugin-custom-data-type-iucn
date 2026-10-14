@@ -22,6 +22,11 @@ const RED_LIST_CATEGORIES = ["EX", "EW", "CR", "EN", "VU"]
 // 100 requests per minute, which keeps headroom below the limit.
 const MIN_ENTRY_DURATION_MS = 600
 
+// The IUCN API answers 429 when the rate limit is exceeded. Its own quota is
+// counted per minute and the updater is called again every few seconds, so a
+// run can start with the quota of the run before it still counted.
+const RATE_LIMIT_RETRY_WAITS_MS = [5000, 10000]
+
 // page size of the searches for records to tag
 const SEARCH_LIMIT = 1000
 
@@ -58,7 +63,11 @@ function request(options) {
                     return
                 }
                 if (res.statusCode < 200 || res.statusCode >= 300) {
-                    reject(new Error(`${options.method || "GET"} ${url.pathname} answered ${res.statusCode}: ${data}`))
+                    const error = new Error(
+                        `${options.method || "GET"} ${url.pathname} answered ${res.statusCode}: ${data}`
+                    )
+                    error.statusCode = res.statusCode
+                    reject(error)
                     return
                 }
                 if (data === "") {
@@ -95,15 +104,26 @@ class IUCNApi {
         this.token = settings.api_token
     }
 
-    get(path) {
-        return request({
-            url: this.url + path,
-            // when a search finds no result, the API v4 answers with 404
-            notFoundIsEmpty: true,
-            headers: {
-                Authorization: this.token,
-            },
-        })
+    async get(path) {
+        let attempt = 0
+        while (true) {
+            try {
+                return await request({
+                    url: this.url + path,
+                    // when a search finds no result, the API v4 answers with 404
+                    notFoundIsEmpty: true,
+                    headers: {
+                        Authorization: this.token,
+                    },
+                })
+            } catch (e) {
+                if (e.statusCode !== 429 || attempt >= RATE_LIMIT_RETRY_WAITS_MS.length) {
+                    throw e
+                }
+                await wait(RATE_LIMIT_RETRY_WAITS_MS[attempt])
+                attempt++
+            }
+        }
     }
 
     searchBySisTaxonId(sisTaxonId) {
@@ -469,7 +489,22 @@ async function update(payload, info, log) {
     for (const object of payload.objects) {
         const startTime = Date.now()
 
-        const data = await lookupEntry(iucn, object.data)
+        let data
+        try {
+            data = await lookupEntry(iucn, object.data)
+        } catch (e) {
+            // the entry keeps what it has and is looked at again soon, the rest
+            // of the batch is still worth saving
+            log.push(`entry ${object.identifier} could not be updated: ${e}`)
+            object.data = Object.assign({}, object.data, { _expires_at: expiresAt(1) })
+            updated.push(object)
+            const failedElapsed = Date.now() - startTime
+            if (failedElapsed < MIN_ENTRY_DURATION_MS) {
+                await wait(MIN_ENTRY_DURATION_MS - failedElapsed)
+            }
+            continue
+        }
+
         if (data === null) {
             // The entry is gone from the IUCN API, so the species is no longer
             // on the red list.
