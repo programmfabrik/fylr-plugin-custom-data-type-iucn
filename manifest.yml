@@ -76,9 +76,11 @@ custom_types:
               - type: "value"
                 value: "%info.json%"
       # The IUCN API allows 120 requests per minute and the updater needs one
-      # request per entry. One batch of 100 entries takes about 60 seconds.
+      # request per entry. The quota is counted per minute and the updater is
+      # called again a few seconds after a run, so a smaller batch leaves room
+      # for the run that follows. 50 entries take about 30 seconds.
       timeout: 600
-      batch_size: 100
+      batch_size: 50
       # only a fallback for entries the updater has not processed yet, it sets
       # _expires_at on every entry it updates
       expires_days: 1
